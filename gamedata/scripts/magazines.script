@@ -218,9 +218,7 @@ function on_item_drag_dropped(item, weapon, from_slot, to_slot)
     end
 	local active_id = db.actor:active_item() and db.actor:active_item():id() or 0 
 	local item_id = item:id()
-	local item_sec = item:section()
 	local weapon_id = weapon:id()
-	local weapon_sec = weapon:section()
 	if(item_id == weapon_id) then
 		return
 	end
@@ -229,28 +227,7 @@ function on_item_drag_dropped(item, weapon, from_slot, to_slot)
 
 	-- bullet to mag
 	if(IsAmmo(item) and is_magazine(weapon)) then
-		-- check compatibility, then fire (heh) the loading loop
-		local ammos = invert_table(get_magazine_caliber(weapon))
-		local ammo_sec = item_sec
-		print_dbg("Checking compat for ammo sec %s", ammo_sec)
-		if ammos[ammo_sec] ~= nil then
-			-- start loading loop
-		    local capacity = SYS_GetParam(2, weapon_sec, "max_mag_size") or 20
-			local behavior = is_box_mode and get_config("loadstash_behavior") or get_config("load_behavior")
-
-			if behavior == 1 then
-				fast_load_magazine(weapon, item)
-			elseif behavior == 2 then
-				fast_load_magazine(weapon, item, true)
-			else
-				local delay = get_mag_time(weapon_sec, false)
-				print_dbg("Start load magazine at speed %s", delay)
-				ext_ammo_box = item
-				action_start_magload()
-				RemoveTimeEvent("Mag_redux", "load_mag"..weapon_id)
-				create_time_event("Mag_redux", "load_mag"..weapon_id, 0.1, load_magazine, weapon, capacity, delay * 1000)
-			end
-		end
+		load_ammo_into_mag(item, weapon)
 	end
 	-- mag to weapon
 	if is_magazine(item) and IsWeapon(weapon) and is_compatible(weapon, item) then
@@ -272,6 +249,37 @@ function on_item_drag_dropped(item, weapon, from_slot, to_slot)
 	if (IsAmmo(item) and IsWeapon(weapon)) then
 		chamber_single_round(item, weapon)
 	end
+end
+
+function get_ammo_types_for_mag(mag)
+  return invert_table(get_magazine_caliber(mag))
+end
+
+function load_ammo_into_mag(ammo, mag)
+  -- check compatibility, then fire (heh) the loading loop
+  local ammo_sec = ammo:section()
+	local mag_sec = mag:section()
+  local mag_id = mag:id()
+  local ammos = get_ammo_types_for_mag(mag)
+  print_dbg("Checking compat for ammo sec %s", ammo_sec)
+  if ammos[ammo_sec] ~= nil then
+    -- start loading loop
+      local capacity = SYS_GetParam(2, mag_sec, "max_mag_size") or 20
+    local behavior = is_box_mode and get_config("loadstash_behavior") or get_config("load_behavior")
+
+    if behavior == 1 then
+      fast_load_magazine(mag, ammo)
+    elseif behavior == 2 then
+      fast_load_magazine(mag, ammo, true)
+    else
+      local delay = get_mag_time(mag_sec, false)
+      print_dbg("Start load magazine at speed %s", delay)
+      ext_ammo_box = ammo
+      action_start_magload()
+      RemoveTimeEvent("Mag_redux", "load_mag"..mag_id)
+      create_time_event("Mag_redux", "load_mag"..mag_id, 0.1, load_magazine, mag, capacity, delay * 1000)
+    end
+  end
 end
 
 -- reassign mag data from magazine to weapon
@@ -924,6 +932,77 @@ function retool_mag_functor(obj)
 end
 
 
+local ammo_type_fmj = 1
+local ammo_type_hp = 4
+local ammo_type_ap = 7
+
+function check_load_magazine(obj, requested_ammo_type, menu_text)
+	if is_magazine(obj) then
+		local ammos = get_ammo_types_for_mag(obj)
+    local show_menu_option = false
+    db.actor:inventory_for_each(
+      function (item)
+        if show_menu_option ~= false then 
+          return
+        end
+        
+        local item_section = item:section()
+        local item_ammo_type = ammos[item_section]
+        if item_ammo_type == requested_ammo_type then
+          show_menu_option = gc(menu_text)
+        end
+      end
+    )
+    return show_menu_option
+	end
+end
+
+function load_mag_with_ammo(obj, requested_ammo_type)
+  if is_magazine(obj) then
+		local ammo_types = get_ammo_types_for_mag(obj)
+    local ammo = nil
+    db.actor:inventory_for_each(
+      function (item)
+        if ammo ~= nil then 
+          return
+        end
+        
+        local item_section = item:section()
+        local item_ammo_type = ammo_types[item_section]
+        if item_ammo_type == requested_ammo_type then
+          ammo = item
+        end
+      end
+    )
+    if ammo ~= nil then
+      load_ammo_into_mag(ammo, obj)
+    end
+	end
+end
+
+function check_load_fmj(obj)
+  return check_load_magazine(obj, ammo_type_fmj, "st_mag_load_fmj")
+end
+
+function load_fmj(obj)
+  load_mag_with_ammo(obj, ammo_type_fmj)
+end
+
+function check_load_hp(obj)
+  return check_load_magazine(obj, ammo_type_hp, "st_mag_load_hp")
+end
+
+function load_hp(obj)
+  load_mag_with_ammo(obj, ammo_type_hp)
+end
+
+function check_load_ap(obj)
+  return check_load_magazine(obj, ammo_type_ap, "st_mag_load_ap")
+end
+
+function load_ap(obj)
+  load_mag_with_ammo(obj, ammo_type_ap)
+end
 
 -----------------------------------------
 -- SECTION weapon logic -----------------
@@ -1049,6 +1128,9 @@ end
 function on_game_start()
 	on_option_change()
 	custom_functor_autoinject.add_functor("mags_load", check_eject_magazine, check_eject_magazine, nil, eject_magazine, true)
+	custom_functor_autoinject.add_functor("load_fmj", check_load_fmj, check_load_fmj, nil, load_fmj, true)
+	custom_functor_autoinject.add_functor("load_hp", check_load_hp, check_load_hp, nil, load_hp, true)
+	custom_functor_autoinject.add_functor("load_ap", check_load_ap, check_load_ap, nil, load_ap, true)
 
 	RegisterScriptCallback("ActorMenu_on_item_before_move", ActorMenu_on_item_before_move)
 	RegisterScriptCallback("ActorMenu_on_item_focus_receive", ActorMenu_on_item_focus_receive)
